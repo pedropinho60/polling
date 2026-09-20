@@ -25,4 +25,9 @@ public class ServiceGrpcPollService extends PollServiceGrpc.PollServiceImplBase 
     public void votePoll(Vote request, StreamObserver<Empty> responseObserver) {
         backend.votePoll(request, responseObserver);
     }
+
+    @Override
+    public void notifyVotes(PollName request, StreamObserver<PollResponse> responseObserver) {
+        backend.notifyVotes(request, responseObserver);
+    }
 }

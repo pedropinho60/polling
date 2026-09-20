@@ -17,7 +17,6 @@ public class PollService {
     private final int serviceUdpPort;
     private final int serviceHttpPort;
     private final int serviceGrpcPort;
-    private final int gatewayHeartbeatPort = 9000;
 
     public PollService(int udpPort, int httpPort, int grpcPort) {
         serviceUdpPort = udpPort;
@@ -32,6 +31,7 @@ public class PollService {
             byte[] data = portMsg.getBytes();
 
             while (true) {
+                int gatewayHeartbeatPort = 9000;
                 DatagramPacket packet = new DatagramPacket(data, data.length, gatewayAddress, gatewayHeartbeatPort);
                 hbSocket.send(packet);
                 Thread.sleep(2000);

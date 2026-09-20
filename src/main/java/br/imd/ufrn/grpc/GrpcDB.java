@@ -5,6 +5,7 @@ import br.imd.ufrn.model.Poll;
 import br.imd.ufrn.database.PollDatabase;
 import com.google.protobuf.Empty;
 import io.grpc.Status;
+import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 
 public class GrpcDB extends PollServiceGrpc.PollServiceImplBase {
@@ -20,8 +21,7 @@ public class GrpcDB extends PollServiceGrpc.PollServiceImplBase {
         var poll = new Poll(request.getName(), options.toArray(new String[0]));
         try {
             db.createPoll(poll);
-            Empty empty = Empty.newBuilder().build();
-            responseObserver.onNext(empty);
+            responseObserver.onNext(Empty.getDefaultInstance());
             responseObserver.onCompleted();
         } catch (RuntimeException e) {
             responseObserver.onError(Status.ALREADY_EXISTS.withDescription(e.getMessage()).asRuntimeException());
@@ -50,10 +50,23 @@ public class GrpcDB extends PollServiceGrpc.PollServiceImplBase {
         try {
             db.vote(request.getPollName(), request.getOption());
 
-            Empty empty = Empty.newBuilder().build();
-
-            responseObserver.onNext(empty);
+            responseObserver.onNext(Empty.getDefaultInstance());
             responseObserver.onCompleted();
+        } catch (RuntimeException e) {
+            responseObserver.onError(Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
+    @Override
+    public void notifyVotes(PollName request, StreamObserver<PollResponse> responseObserver) {
+        try {
+            db.subscribe(request.getName(), responseObserver);
+
+            var serverObserver = (ServerCallStreamObserver<PollResponse>) responseObserver;
+
+            serverObserver.setOnCancelHandler(() -> {
+                db.unsubscribe(request.getName(), responseObserver);
+            });
         } catch (RuntimeException e) {
             responseObserver.onError(Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
         }

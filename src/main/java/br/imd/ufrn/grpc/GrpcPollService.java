@@ -1,20 +1,19 @@
 package br.imd.ufrn.grpc;
 
 import br.imd.ufrn.*;
-import br.imd.ufrn.gateway.APIGateway;
+import br.imd.ufrn.heartbeat.HeartbeatManager;
 import com.google.protobuf.Empty;
-import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
 public class GrpcPollService extends PollServiceGrpc.PollServiceImplBase {
-    private final APIGateway gateway;
+    private final HeartbeatManager hb;
 
-    public GrpcPollService(APIGateway gateway) {
-        this.gateway = gateway;
+    public GrpcPollService(HeartbeatManager hb) {
+        this.hb = hb;
     }
 
     private PollServiceGrpc.PollServiceStub getStub() {
-        GrpcService service = gateway.getNextAvailableGrpcService();
+        GrpcService service = hb.getNextAvailableGrpcService();
 
         if (service == null) {
             throw new RuntimeException("No poll services available");
@@ -48,6 +47,16 @@ public class GrpcPollService extends PollServiceGrpc.PollServiceImplBase {
         try {
             var stub = getStub();
             stub.votePoll(request, responseObserver);
+        } catch (RuntimeException e) {
+            responseObserver.onError(e);
+        }
+    }
+
+    @Override
+    public void notifyVotes(PollName request, StreamObserver<PollResponse> responseObserver) {
+        try {
+            var stub = getStub();
+            stub.notifyVotes(request, responseObserver);
         } catch (RuntimeException e) {
             responseObserver.onError(e);
         }
