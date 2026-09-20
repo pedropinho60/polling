@@ -1,0 +1,32 @@
+syntax = "proto3";
+package polling;
+option java_package = "br.imd.ufrn";
+option java_multiple_files = true;
+
+import "google/protobuf/empty.proto";
+
+message PollCreation {
+  string name = 1;
+  repeated string options = 2;
+}
+
+message PollName {
+  string name = 1;
+}
+
+message Vote {
+  string poll_name = 1;
+  string option = 2;
+}
+
+message PollResponse {
+  string name = 1;
+  map<string, int64> options = 2;
+}
+
+service PollService {
+  rpc CreatePoll (PollCreation) returns (google.protobuf.Empty);
+  rpc GetPoll (PollName) returns (PollResponse);
+  rpc VotePoll (Vote) returns (google.protobuf.Empty);
+  rpc NotifyVotes (PollName) returns (stream PollResponse);
+}
