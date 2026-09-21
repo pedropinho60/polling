@@ -21,8 +21,12 @@ import java.util.stream.Collectors;
 import static br.imd.ufrn.http.HttpUtil.getHttpBody;
 import static br.imd.ufrn.http.HttpUtil.sendHttpResponse;
 
-public class DBServer {
-    PollDatabase db = new PollDatabase();
+public class DBServer implements Closeable{
+    PollDatabase db;
+
+    public DBServer() throws IOException {
+        db = new PollDatabase();
+    }
 
     public void runUdp() {
         try (DatagramSocket serverSocket = new DatagramSocket(9092)){
@@ -190,14 +194,22 @@ public class DBServer {
         }
     }
 
-    public static void main(String[] args) throws InterruptedException {
-        DBServer server = new DBServer();
-        Thread udp = Thread.startVirtualThread(server::runUdp);
-        Thread http = Thread.startVirtualThread(server::runHttp);
-        Thread grpc = Thread.startVirtualThread(server::runGrpc);
+    @Override
+    public void close() throws IOException {
+        db.close();
+    }
 
-        udp.join();
-        http.join();
-        grpc.join();
+    public static void main(String[] args) throws InterruptedException {
+        try (DBServer server = new DBServer()) {
+            Thread udp = Thread.startVirtualThread(server::runUdp);
+            Thread http = Thread.startVirtualThread(server::runHttp);
+            Thread grpc = Thread.startVirtualThread(server::runGrpc);
+
+            udp.join();
+            http.join();
+            grpc.join();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }
