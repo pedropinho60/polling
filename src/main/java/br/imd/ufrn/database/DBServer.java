@@ -74,7 +74,7 @@ public class DBServer implements Closeable{
 
                     Thread.startVirtualThread(() -> {
                         try {
-                            handleUdpClient(message, receivePacket.getAddress(), receivePacket.getPort());
+                            handleUdpClient(message, receivePacket.getAddress(), receivePacket.getPort(), serverSocket);
                         } catch (Exception e) {
                             e.printStackTrace();
                         }
@@ -89,50 +89,48 @@ public class DBServer implements Closeable{
         }
     }
 
-    private void handleUdpClient(String message, InetAddress clientAddress, int clientPort) throws IOException {
-        try (DatagramSocket dbSocket = new DatagramSocket()) {
-            String response;
+    public void handleUdpClient(String message, InetAddress clientAddress, int clientPort, DatagramSocket serverSocket) throws IOException {
+        String response;
 
-            try {
-                Operation operation = mapper.readValue(message, Operation.class);
-                switch (operation) {
-                    case CreateOperation createOperation -> {
-                        Poll poll = new Poll(createOperation.name(), createOperation.options());
-                        db.createPoll(poll);
-                        response = "Created poll `" + poll.getName() + "`\n";
-                    }
-                    case GetOperation getOperation -> {
-                        Poll poll = db.getPoll(getOperation.poll());
-
-                        String optionsStr = poll.getOptions().entrySet().stream()
-                                .map(entry -> "`" + entry.getKey() + "`: " + entry.getValue() + " votes")
-                                .collect(Collectors.joining(", "));
-
-                        response = "Get poll: name=" +
-                                poll.getName() +
-                                ", options=[" +
-                                optionsStr +
-                                "]\n";
-                    }
-                    case VoteOperation voteOperation -> {
-                        db.vote(voteOperation.poll(), voteOperation.option());
-                        response = "Voted for option `" +
-                                voteOperation.option() +
-                                "` on poll `" +
-                                voteOperation.poll() +
-                                "`\n";
-                    }
+        try {
+            Operation operation = mapper.readValue(message, Operation.class);
+            switch (operation) {
+                case CreateOperation createOperation -> {
+                    Poll poll = new Poll(createOperation.name(), createOperation.options());
+                    db.createPoll(poll);
+                    response = "Created poll `" + poll.getName() + "`\n";
                 }
-            } catch (JsonProcessingException e) {
-                response = "Error while processing json\n";
-            } catch (RuntimeException e) {
-                response = "Error: " + e.getMessage() + "\n";
+                case GetOperation getOperation -> {
+                    Poll poll = db.getPoll(getOperation.poll());
+
+                    String optionsStr = poll.getOptions().entrySet().stream()
+                            .map(entry -> "`" + entry.getKey() + "`: " + entry.getValue() + " votes")
+                            .collect(Collectors.joining(", "));
+
+                    response = "Get poll: name=" +
+                            poll.getName() +
+                            ", options=[" +
+                            optionsStr +
+                            "]\n";
+                }
+                case VoteOperation voteOperation -> {
+                    db.vote(voteOperation.poll(), voteOperation.option());
+                    response = "Voted for option `" +
+                            voteOperation.option() +
+                            "` on poll `" +
+                            voteOperation.poll() +
+                            "`\n";
+                }
             }
-
-            DatagramPacket sendResponsePacket = new DatagramPacket(response.getBytes(), response.getBytes().length, clientAddress, clientPort);
-
-            dbSocket.send(sendResponsePacket);
+        } catch (JsonProcessingException e) {
+            response = "Error while processing json\n";
+        } catch (RuntimeException e) {
+            response = "Error: " + e.getMessage() + "\n";
         }
+
+        DatagramPacket sendResponsePacket = new DatagramPacket(response.getBytes(), response.getBytes().length, clientAddress, clientPort);
+
+        serverSocket.send(sendResponsePacket);
     }
 
     public void runHttp() {
@@ -140,7 +138,9 @@ public class DBServer implements Closeable{
             System.out.println("HTTP server started on port " + httpPort);
 
             while (true) {
-                try (Socket clientSocket = serverSocket.accept()) {
+                try {
+                    Socket clientSocket = serverSocket.accept();
+
                     Thread.startVirtualThread(() -> {
                         try (clientSocket) {
                             handleHttpClient(clientSocket);

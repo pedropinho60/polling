@@ -46,7 +46,7 @@ public class APIGateway {
                 int clientPort = receivePacket.getPort();
 
                 Thread.startVirtualThread(() -> {
-                    handleUdpClient(message, clientAddress, clientPort);
+                    handleUdpClient(message, clientAddress, clientPort, serverSocket);
                 });
             }
         } catch (Exception e) {
@@ -55,12 +55,12 @@ public class APIGateway {
         }
     }
 
-    public void handleUdpClient(String message, InetAddress clientAddress, int clientPort) {
+    public void handleUdpClient(String message, InetAddress clientAddress, int clientPort, DatagramSocket serverSocket) {
         InetSocketAddress serviceAddress = hb.getNextAvailableUdpService();
 
         if (serviceAddress == null) {
             String error = "Error: No Poll services available\n";
-            sendUdpResponse(error, clientAddress, clientPort);
+            sendUdpResponse(error, clientAddress, clientPort, serverSocket);
 
             return;
         }
@@ -81,17 +81,17 @@ public class APIGateway {
 
                 String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
 
-                sendUdpResponse(response, clientAddress, clientPort);
+                sendUdpResponse(response, clientAddress, clientPort, serverSocket);
             } catch (IOException e) {
-                sendUdpResponse("Error: Service timed out.\n", clientAddress, clientPort);
+                sendUdpResponse("Error: Service timed out.\n", clientAddress, clientPort, serverSocket);
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    public void sendUdpResponse(String message, InetAddress address, int port) {
-        try (DatagramSocket socket = new DatagramSocket()) {
+    public void sendUdpResponse(String message, InetAddress address, int port, DatagramSocket socket) {
+        try {
             DatagramPacket packet = new DatagramPacket(message.getBytes(), message.getBytes().length, address, port);
 
             socket.send(packet);
@@ -105,7 +105,9 @@ public class APIGateway {
             System.out.println("HTTP server Started on port " + gatewayHttpPort);
 
             while (true) {
-                try (Socket clientSocket = serverSocket.accept()) {
+                try {
+                    Socket clientSocket = serverSocket.accept();
+
                     Thread.startVirtualThread(() -> {
                         try (clientSocket) {
                             handleHttpClient(clientSocket);
