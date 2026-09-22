@@ -6,21 +6,15 @@ import io.grpc.ManagedChannelBuilder;
 import java.net.InetSocketAddress;
 
 public class GrpcService {
-    private final InetSocketAddress address;
     private final ManagedChannel channel;
     private volatile long lastSeen;
 
     public GrpcService(InetSocketAddress address) {
-        this.address = address;
         this.channel = ManagedChannelBuilder
                 .forAddress(address.getHostString(), address.getPort())
                 .usePlaintext()
                 .build();
         this.lastSeen = System.currentTimeMillis();
-    }
-
-    public InetSocketAddress getAddress() {
-        return address;
     }
 
     public ManagedChannel getChannel() {

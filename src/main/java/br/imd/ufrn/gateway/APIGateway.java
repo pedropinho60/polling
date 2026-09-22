@@ -11,83 +11,115 @@ import java.io.OutputStream;
 import java.net.*;
 
 public class APIGateway {
-    final int gatewayHttpPort = 8080;
-    final int gatewayUdpPort = 9090;
-    final int gatewayGrpcPort = 50051;
+    final int gatewayHttpPort;
+    final int gatewayUdpPort;
+    final int gatewayGrpcPort;
+    final int gatewayHbPort;
 
-    HeartbeatManager hb = new HeartbeatManager();
+    final HeartbeatManager hb;
+
+    public APIGateway(int httpPort, int udpPort, int grpcPort, int gatewayHbPort) {
+        gatewayHttpPort = httpPort;
+        gatewayUdpPort = udpPort;
+        gatewayGrpcPort = grpcPort;
+        this.gatewayHbPort = gatewayHbPort;
+        hb = new HeartbeatManager(gatewayHbPort);
+    }
 
     public void startHeartbeatListener() {
+        System.out.println("Listening for heatbeat on port " + gatewayHbPort);
         hb.listen();
     }
 
     public void runUdp() {
         try (DatagramSocket serverSocket = new DatagramSocket(gatewayUdpPort)){
+            System.out.println("UDP server started on port " + gatewayUdpPort);
             while (true) {
                 byte[] receiveMessage = new byte[1024];
                 DatagramPacket receivePacket = new DatagramPacket(receiveMessage, receiveMessage.length);
 
-                serverSocket.setSoTimeout(0);
                 serverSocket.receive(receivePacket);
+
                 String message = new String(receivePacket.getData(), 0, receivePacket.getLength());
 
-                InetSocketAddress serviceAddress = hb.getNextAvailableUdpService();
-                if (serviceAddress == null) {
-                    String error = "Error: No Poll services available\n";
-                    serverSocket.send(new DatagramPacket(error.getBytes(), error.getBytes().length,
-                                                    receivePacket.getAddress(), receivePacket.getPort()));
+                InetAddress clientAddress = receivePacket.getAddress();
+                int clientPort = receivePacket.getPort();
 
-                    continue;
-                }
-                System.out.println("service port: " + serviceAddress.getPort());
-
-                DatagramPacket servicePacket = new DatagramPacket(message.getBytes(), message.getBytes().length,
-                                                            serviceAddress.getAddress(), serviceAddress.getPort());
-                serverSocket.send(servicePacket);
-
-                byte[] responseMessage = new byte[1024];
-                DatagramPacket responsePacket = new DatagramPacket(responseMessage, responseMessage.length,
-                                                        serviceAddress.getAddress(), serviceAddress.getPort());
-
-                try {
-                    serverSocket.setSoTimeout(3000);
-                    serverSocket.receive(responsePacket);
-
-                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-
-                    DatagramPacket sendResponsePacket = new DatagramPacket(response.getBytes(), response.getBytes().length,
-                                                                receivePacket.getAddress(), receivePacket.getPort());
-                    serverSocket.send(sendResponsePacket);
-                } catch (SocketTimeoutException e) {
-                    String error = "Error: Service timed out.\n";
-                    serverSocket.send(new DatagramPacket(error.getBytes(), error.getBytes().length,
-                                                        receivePacket.getAddress(), receivePacket.getPort()));
-                }
+                Thread.startVirtualThread(() -> {
+                    handleUdpClient(message, clientAddress, clientPort);
+                });
             }
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("UDP Server Terminating");
+            System.out.println("UDP server terminating");
+        }
+    }
+
+    public void handleUdpClient(String message, InetAddress clientAddress, int clientPort) {
+        InetSocketAddress serviceAddress = hb.getNextAvailableUdpService();
+
+        if (serviceAddress == null) {
+            String error = "Error: No Poll services available\n";
+            sendUdpResponse(error, clientAddress, clientPort);
+
+            return;
+        }
+
+        try (DatagramSocket serviceSocket = new DatagramSocket()) {
+            DatagramPacket servicePacket = new DatagramPacket(message.getBytes(), message.getBytes().length, serviceAddress.getAddress(), serviceAddress.getPort());
+
+            serviceSocket.send(servicePacket);
+
+            serviceSocket.setSoTimeout(3000);
+
+            byte[] responseMessage = new byte[1024];
+
+            DatagramPacket responsePacket = new DatagramPacket(responseMessage, responseMessage.length);
+
+            try {
+                serviceSocket.receive(responsePacket);
+
+                String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+
+                sendUdpResponse(response, clientAddress, clientPort);
+            } catch (IOException e) {
+                sendUdpResponse("Error: Service timed out.\n", clientAddress, clientPort);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void sendUdpResponse(String message, InetAddress address, int port) {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            DatagramPacket packet = new DatagramPacket(message.getBytes(), message.getBytes().length, address, port);
+
+            socket.send(packet);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
     public void runHttp() {
         try (ServerSocket serverSocket = new ServerSocket(gatewayHttpPort, 300)) {
-            System.out.println("HTTP Server Started on port " + gatewayHttpPort);
+            System.out.println("HTTP server Started on port " + gatewayHttpPort);
 
             while (true) {
-                Socket clientSocket = serverSocket.accept();
-
-                Thread.startVirtualThread(() -> {
-                    try (clientSocket) {
-                        handleHttpClient(clientSocket);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                });
+                try (Socket clientSocket = serverSocket.accept()) {
+                    Thread.startVirtualThread(() -> {
+                        try (clientSocket) {
+                            handleHttpClient(clientSocket);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    });
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("HTTP Server Terminating");
+            System.out.println("HTTP server terminating");
         }
     }
 
@@ -137,12 +169,18 @@ public class APIGateway {
             server.awaitTermination();
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("gRPC Server Terminating");
+            System.out.println("gRPC server terminating");
         }
     }
 
     public static void main(String[] args) throws InterruptedException {
-        APIGateway gateway = new APIGateway();
+        int httpPort = Integer.parseInt(System.getenv().getOrDefault("HTTP_PORT", "8080"));
+        int udpPort = Integer.parseInt(System.getenv().getOrDefault("UDP_PORT", "9090"));
+        int grpcPort = Integer.parseInt(System.getenv().getOrDefault("GRPC_PORT", "50051"));
+        int gatewayHbPort = Integer.parseInt(System.getenv().getOrDefault("GATEWAY_HB_PORT", "9000"));
+
+        APIGateway gateway = new APIGateway(httpPort, udpPort, grpcPort, gatewayHbPort);
+
         Thread heartbeat = Thread.startVirtualThread(gateway::startHeartbeatListener);
         Thread udp = Thread.startVirtualThread(gateway::runUdp);
         Thread http = Thread.startVirtualThread(gateway::runHttp);

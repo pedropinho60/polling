@@ -15,9 +15,13 @@ public class HeartbeatManager {
     ConcurrentMap<InetSocketAddress, Long> activeUdpServices = new ConcurrentHashMap<>();
     ConcurrentMap<InetSocketAddress, Long> activeHttpServices = new ConcurrentHashMap<>();
     ConcurrentMap<InetSocketAddress, GrpcService> activeGrpcServices = new ConcurrentHashMap<>();
-    final int heartbeatPort = 9000;
+    final int heartbeatPort;
     final long serviceTimeoutMs = 5000;
     int roundRobinIndex = 0;
+
+    public HeartbeatManager(int heartbeatPort) {
+        this.heartbeatPort = heartbeatPort;
+    }
 
     public void listen() {
         try (DatagramSocket hbSocket = new DatagramSocket(heartbeatPort)) {

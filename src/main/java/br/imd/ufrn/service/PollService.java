@@ -1,10 +1,8 @@
 package br.imd.ufrn.service;
 
-import br.imd.ufrn.PollServiceGrpc;
-import br.imd.ufrn.grpc.ServiceGrpcPollService;
+import br.imd.ufrn.grpc.GrpcPollService;
+import br.imd.ufrn.heartbeat.HeartbeatManager;
 import br.imd.ufrn.http.HttpUtil;
-import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 
@@ -18,21 +16,38 @@ public class PollService {
     private final int serviceHttpPort;
     private final int serviceGrpcPort;
 
-    public PollService(int udpPort, int httpPort, int grpcPort) {
+    private final String gatewayAddress;
+    private final int gatewayHbPort;
+
+    private final int serviceHbPort;
+
+    private final HeartbeatManager hb;
+
+    public PollService(int udpPort, int httpPort, int grpcPort, int serviceHbPort, String gatewayAddress, int gatewayHbPort) {
         serviceUdpPort = udpPort;
         serviceHttpPort = httpPort;
         serviceGrpcPort = grpcPort;
+        this.gatewayAddress = gatewayAddress;
+        this.gatewayHbPort = gatewayHbPort;
+        this.serviceHbPort = serviceHbPort;
+
+        hb = new HeartbeatManager(serviceHbPort);
     }
+
+    public void startHeartbeatListener() {
+        System.out.println("Listening for heatbeat on port " + serviceHbPort);
+        hb.listen();
+    }
+
 
     public void startHeartbeat() {
         try (DatagramSocket hbSocket = new DatagramSocket()) {
-            InetAddress gatewayAddress = InetAddress.getByName("127.0.0.1");
+            InetAddress gatewayAddress = InetAddress.getByName(this.gatewayAddress);
             String portMsg = serviceUdpPort + "," + serviceHttpPort + "," + serviceGrpcPort;
             byte[] data = portMsg.getBytes();
 
             while (true) {
-                int gatewayHeartbeatPort = 9000;
-                DatagramPacket packet = new DatagramPacket(data, data.length, gatewayAddress, gatewayHeartbeatPort);
+                DatagramPacket packet = new DatagramPacket(data, data.length, gatewayAddress, gatewayHbPort);
                 hbSocket.send(packet);
                 Thread.sleep(2000);
             }
@@ -43,6 +58,7 @@ public class PollService {
 
     public void runUdp() {
         try (DatagramSocket serverSocket = new DatagramSocket(serviceUdpPort)){
+            System.out.println("UDP server started on port " + serviceUdpPort);
             while (true) {
                 byte[] receiveMessage = new byte[1024];
                 DatagramPacket receivePacket = new DatagramPacket(receiveMessage, receiveMessage.length);
@@ -50,54 +66,94 @@ public class PollService {
 
                 String message = new String(receivePacket.getData(), 0, receivePacket.getLength());
 
-                InetAddress dbAddress = InetAddress.getByName("127.0.0.1");
-                int dbPort = 9092;
+                InetAddress clientAddress = receivePacket.getAddress();
+                int clientPort = receivePacket.getPort();
 
-                DatagramPacket dbPacket = new DatagramPacket(message.getBytes(), message.length(), dbAddress, dbPort);
-                serverSocket.send(dbPacket);
-
-                byte[] responseMessage = new byte[1024];
-                DatagramPacket responsePacket = new DatagramPacket(responseMessage, responseMessage.length, dbAddress, dbPort);
-                serverSocket.receive(responsePacket);
-
-                String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-
-                InetAddress gatewayAddress = receivePacket.getAddress();
-                int gatewayPort = receivePacket.getPort();
-
-                DatagramPacket sendResponsePacket = new DatagramPacket(response.getBytes(), response.getBytes().length, gatewayAddress, gatewayPort);
-                serverSocket.send(sendResponsePacket);
+                Thread.startVirtualThread(() -> {
+                    handleUdpClient(message, clientAddress, clientPort);
+                });
             }
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("UDP Server Terminating");
+            System.out.println("UDP server terminating");
+        }
+    }
+
+    public void handleUdpClient(String message, InetAddress clientAddress, int clientPort) {
+        InetSocketAddress dbAddress = hb.getNextAvailableUdpService();
+
+        if (dbAddress == null) {
+            String error = "Error: No database available\n";
+            sendUdpResponse(error, clientAddress, clientPort);
+
+            return;
+        }
+
+        try (DatagramSocket serviceSocket = new DatagramSocket()) {
+            DatagramPacket dbPacket = new DatagramPacket(message.getBytes(), message.length(), dbAddress.getAddress(), dbAddress.getPort());
+
+            serviceSocket.send(dbPacket);
+
+            serviceSocket.setSoTimeout(3000);
+
+            byte[] responseMessage = new byte[1024];
+            DatagramPacket responsePacket = new DatagramPacket(responseMessage, responseMessage.length);
+
+            try {
+                serviceSocket.receive(responsePacket);
+
+                String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
+                sendUdpResponse(response, clientAddress, clientPort);
+            } catch (IOException e) {
+                sendUdpResponse("Error: Database timed out.\n", clientAddress, clientPort);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void sendUdpResponse(String message, InetAddress address, int port) {
+        try (DatagramSocket socket = new DatagramSocket()) {
+            DatagramPacket packet = new DatagramPacket(message.getBytes(), message.getBytes().length, address, port);
+
+            socket.send(packet);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
     public void runHttp() {
         try (ServerSocket serverSocket = new ServerSocket(serviceHttpPort, 300)) {
-            System.out.println("HTTP Server Started on port " + serviceHttpPort);
+            System.out.println("HTTP server started on port " + serviceHttpPort);
 
             while (true) {
-                Socket clientSocket = serverSocket.accept();
-
-                Thread.startVirtualThread(() -> {
-                    try (clientSocket) {
-                        handleHttpClient(clientSocket);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                });
+                try (Socket clientSocket = serverSocket.accept()) {
+                    Thread.startVirtualThread(() -> {
+                        try (clientSocket) {
+                            handleHttpClient(clientSocket);
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    });
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("HTTP Server Terminating");
+            System.out.println("HTTP server terminating");
         }
     }
 
     private void handleHttpClient(Socket clientSocket) throws IOException {
-        InetAddress dbAddress = InetAddress.getByName("127.0.0.1");
-        try (Socket serviceSocket = new Socket(dbAddress, 8082)) {
+        InetSocketAddress dbAddress = hb.getNextAvailableHttpService();
+
+        if (dbAddress == null) {
+            HttpUtil.sendHttpResponse(clientSocket, 500, "Error: No database available");
+            return;
+        }
+
+        try (Socket serviceSocket = new Socket(dbAddress.getAddress(), dbAddress.getPort())) {
             InputStream clientIn = clientSocket.getInputStream();
             OutputStream clientOut = clientSocket.getOutputStream();
 
@@ -124,16 +180,9 @@ public class PollService {
 
     public void runGrpc() {
         try {
-            ManagedChannel dbChannel = ManagedChannelBuilder
-                    .forAddress("127.0.0.1", 50053)
-                    .usePlaintext()
-                    .build();
-
-            var db = PollServiceGrpc.newStub(dbChannel);
-
             Server server = ServerBuilder
                     .forPort(serviceGrpcPort)
-                    .addService(new ServiceGrpcPollService(db))
+                    .addService(new GrpcPollService(hb))
                     .build()
                     .start();
 
@@ -142,32 +191,28 @@ public class PollService {
             server.awaitTermination();
         } catch (Exception e) {
             e.printStackTrace();
-            System.out.println("gRPC Server Terminating");
+            System.out.println("gRPC server terminating");
         }
     }
 
     public static void main(String[] args) throws InterruptedException {
-        int udpPort = 9090;
-        int httpPort = 8080;
-        int grpcPort = 50052;
-        if (args.length > 2) {
-            try {
-                udpPort = Integer.parseInt(args[0]);
-                httpPort = Integer.parseInt(args[1]);
-                grpcPort = Integer.parseInt(args[2]);
-            } catch (NumberFormatException e) {
-                System.out.println("Invalid ports provided, using defaults");
-            }
-        }
+        int httpPort = Integer.parseInt(System.getenv().getOrDefault("HTTP_PORT", "8080"));
+        int udpPort = Integer.parseInt(System.getenv().getOrDefault("UDP_PORT", "9090"));
+        int grpcPort = Integer.parseInt(System.getenv().getOrDefault("GRPC_PORT", "50051"));
+        int serviceHbPort = Integer.parseInt(System.getenv().getOrDefault("SERVICE_HB_PORT", "9000"));
+        String gatewayAddress = System.getenv().getOrDefault("GATEWAY_ADDR", "127.0.0.1");
+        int gatewayHbPort = Integer.parseInt(System.getenv().getOrDefault("GATEWAY_HB_PORT", "9000"));
 
-        PollService service = new PollService(udpPort, httpPort, grpcPort);
+        PollService service = new PollService(udpPort, httpPort, grpcPort, serviceHbPort, gatewayAddress, gatewayHbPort);
 
         Thread heartbeat = Thread.startVirtualThread(service::startHeartbeat);
+        Thread heartbeatListener = Thread.startVirtualThread(service::startHeartbeatListener);
         Thread udp = Thread.startVirtualThread(service::runUdp);
         Thread http = Thread.startVirtualThread(service::runHttp);
         Thread grpc = Thread.startVirtualThread(service::runGrpc);
 
         heartbeat.join();
+        heartbeatListener.join();
         udp.join();
         http.join();
         grpc.join();
